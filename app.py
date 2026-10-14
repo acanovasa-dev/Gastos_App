@@ -32,7 +32,7 @@ fotos = st.file_uploader("Arrastra aquí los tickets", type=["jpg", "jpeg", "png
 
 if st.button("🚀 Procesar Gastos"):
     if not api_key:
-        st.error("Error: Falta la clave API en la configuración.")
+        st.error("Error: Falta la clave API en la configuración de Secrets.")
     elif not fotos:
         st.warning("⚠️ Por favor, sube al menos un ticket.")
     else:
@@ -48,9 +48,9 @@ if st.button("🚀 Procesar Gastos"):
             
             prompt = "Extrae los gastos. Para el concepto usa SÓLO mayúsculas según la lista estricta proporcionada."
             exito = False
-            tiempo_espera = 6
+            ultimo_error = ""
             
-            for intento in range(4):
+            for intento in range(3):
                 try:
                     response = client.models.generate_content(
                         model="gemini-3.8-flash",
@@ -71,24 +71,27 @@ if st.button("🚀 Procesar Gastos"):
                         exito = True
                         break
                     else:
-                        raise Exception("No se detectó información contable en el ticket.")
+                        ultimo_error = "No se detectaron datos contables en la imagen"
                 except Exception as e:
-                    error_str = str(e)
-                    if "503" in error_str or "UNAVAILABLE" in error_str or "429" in error_str:
-                        st.toast(f"⏳ Servidor saturado. Reintentando ticket {foto.name} en {tiempo_espera}s...", icon="🔄")
-                        time.sleep(tiempo_espera)
-                        tiempo_espera += 6
+                    ultimo_error = str(e)
+                    error_str = ultimo_error.upper()
+                    # Si el error es de saturación o límite por minuto, avisa y espera
+                    if "503" in error_str or "UNAVAILABLE" in error_str or "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        st.toast(f"⏳ Límite de Google alcanzado. Esperando 12s para reintentar {foto.name}...", icon="🔄")
+                        time.sleep(12)
                     else:
-                        break
+                        break # Si es otro error (ej. clave rota), no reintenta
             
             if not exito:
-                tickets_fallidos.append(foto.name)
+                tickets_fallidos.append(f"{foto.name} (Motivo: {ultimo_error[:120]})")
             
             barra_progreso.progress((i + 1) / len(fotos), text=f"Procesando {i+1} de {len(fotos)} tickets...")
+            time.sleep(1) # Pausa mínima entre fotos para no ahogar la API
         
-        # Resumen de resultados
         if tickets_fallidos:
-            st.error(f"⚠️ Atención: No se pudieron leer {len(tickets_fallidos)} tickets ({', '.join(tickets_fallidos)}). Comprueba que no estén borrosos o cortados.")
+            st.error("⚠️ Los siguientes tickets fallaron:")
+            for tf in tickets_fallidos:
+                st.write(f"- {tf}")
         
         if todos_los_gastos:
             todos_los_gastos.sort(key=lambda x: (x["concepto"], x["fecha_dt"]))
@@ -105,7 +108,7 @@ if st.button("🚀 Procesar Gastos"):
             output = io.BytesIO()
             wb.save(output)
             
-            st.success(f"🎉 ¡Proceso finalizado! Se han extraído {len(todos_los_gastos)} gastos correctamente.")
+            st.success(f"🎉 ¡Proceso finalizado! Se han extraído {len(todos_los_gastos)} gastos.")
             st.download_button(
                 label="📥 Descargar Excel para Copiar y Pegar",
                 data=output.getvalue(),
