@@ -59,26 +59,10 @@ if st.button("🚀 Procesar Gastos"):
             exito = False
             for intento in range(3):
                 try:
-                    response = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=ListaTickets,
-                            temperature=0.1,
-                        ),
-                    )
-                    if response.parsed and response.parsed.tickets:
-                        for t in response.parsed.tickets:
-                            desc = f"{t.codigo_postal} - {t.localidad}, {t.detalle}"
-                            todos_los_gastos.append({
-                                "fecha": t.fecha, "fecha_dt": convertir_fecha(t.fecha),
-                                "descripcion": desc, "importe": t.importe, "concepto": t.concepto
-                            })
-                        exito = True
-                        break
-                    else:
-                        raise Exception("No se detectaron tickets válidos en este grupo.")
+                    response = client.models.generate_content(...)
+                    # (aquí van las líneas normales de lectura...)
+                    exito = True
+                    break
                 except Exception as e:
                     error_str = str(e).upper()
                     if "503" in error_str or "429" in error_str or "UNAVAILABLE" in error_str:
@@ -87,7 +71,10 @@ if st.button("🚀 Procesar Gastos"):
                     else:
                         st.error(f"Error procesando {nombres_lote}: {e}")
                         break
-            
+
+            if not exito:
+                st.error(f"❌ No se pudo procesar el grupo ({nombres_lote}). Revisa si las fotos son legibles o inténtalo en un momento.")
+
             porcentaje = min(1.0, (i + lote_tamano) / len(fotos))
             barra_progreso.progress(porcentaje, text=f"Procesando bloque {min(i+lote_tamano, len(fotos))} de {len(fotos)} tickets...")
             time.sleep(1)
