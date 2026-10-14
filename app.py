@@ -8,7 +8,6 @@ from google import genai
 from google.genai import types
 import openpyxl
 
-# Estructura exigida por tu Excel
 class TicketGasto(BaseModel):
     fecha: str = Field(description="Fecha del ticket DD/MM/YYYY")
     codigo_postal: str = Field(description="Código postal de 5 dígitos. Búscalo por NIF o localidad si no sale.")
@@ -24,38 +23,34 @@ def convertir_fecha(fecha_str):
     try: return datetime.strptime(fecha_str, "%d/%m/%Y")
     except: return datetime(2099, 12, 31)
 
-# Configuración de la página web
 st.set_page_config(page_title="Gastos Electren", page_icon="🧾")
 st.title("🧾 Automatizador de Notas de Gastos")
 st.markdown("Sube las fotos de tus tickets y descarga el Excel listo para copiar y pegar.")
 
-# Capturar la clave oculta
 api_key = st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
-
-# Zona para arrastrar fotos
-fotos = st.file_uploader("Arrastra aquí los tickets (puedes seleccionar varios a la vez)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+fotos = st.file_uploader("Arrastra aquí los tickets", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if st.button("🚀 Procesar Gastos"):
     if not api_key:
-        st.error("Error de configuración: Falta la clave API en el servidor.")
+        st.error("Error: Falta la clave API en la configuración.")
     elif not fotos:
         st.warning("⚠️ Por favor, sube al menos un ticket.")
     else:
         client = genai.Client(api_key=api_key)
         todos_los_gastos = []
+        tickets_fallidos = []
         
-        # Barra de progreso visual
         barra_progreso = st.progress(0, text="Iniciando lectura de tickets...")
         
         for i, foto in enumerate(fotos):
             img = Image.open(foto)
-            img.thumbnail((1024, 1024)) # TRUCO: Comprimir imagen para que vaya súper rápido
+            img.thumbnail((1024, 1024))
             
             prompt = "Extrae los gastos. Para el concepto usa SÓLO mayúsculas según la lista estricta proporcionada."
-            reintentos = 4
-            tiempo_espera = 5
+            exito = False
+            tiempo_espera = 6
             
-            for intento in range(reintentos):
+            for intento in range(4):
                 try:
                     response = client.models.generate_content(
                         model="gemini-3.8-flash",
@@ -66,27 +61,36 @@ if st.button("🚀 Procesar Gastos"):
                             temperature=0.1,
                         ),
                     )
-                    for t in response.parsed.tickets:
-                        desc = f"{t.codigo_postal} - {t.localidad}, {t.detalle}"
-                        todos_los_gastos.append({
-                            "fecha": t.fecha, "fecha_dt": convertir_fecha(t.fecha),
-                            "descripcion": desc, "importe": t.importe, "concepto": t.concepto
-                        })
-                    break # Si sale bien, rompe el bucle de reintentos
+                    if response.parsed and response.parsed.tickets:
+                        for t in response.parsed.tickets:
+                            desc = f"{t.codigo_postal} - {t.localidad}, {t.detalle}"
+                            todos_los_gastos.append({
+                                "fecha": t.fecha, "fecha_dt": convertir_fecha(t.fecha),
+                                "descripcion": desc, "importe": t.importe, "concepto": t.concepto
+                            })
+                        exito = True
+                        break
+                    else:
+                        raise Exception("No se detectó información contable en el ticket.")
                 except Exception as e:
                     error_str = str(e)
                     if "503" in error_str or "UNAVAILABLE" in error_str or "429" in error_str:
-                        st.toast(f"⏳ El servidor de Google está ocupado. Reintentando ticket {i+1} en {tiempo_espera}s...", icon="🔄")
+                        st.toast(f"⏳ Servidor saturado. Reintentando ticket {foto.name} en {tiempo_espera}s...", icon="🔄")
                         time.sleep(tiempo_espera)
-                        tiempo_espera += 5
+                        tiempo_espera += 6
                     else:
-                        st.error(f"❌ Error al leer el ticket {foto.name}: {e}")
                         break
             
-            barra_progreso.progress((i + 1) / len(fotos), text=f"✅ Procesado {i+1} de {len(fotos)} tickets")
+            if not exito:
+                tickets_fallidos.append(foto.name)
+            
+            barra_progreso.progress((i + 1) / len(fotos), text=f"Procesando {i+1} de {len(fotos)} tickets...")
+        
+        # Resumen de resultados
+        if tickets_fallidos:
+            st.error(f"⚠️ Atención: No se pudieron leer {len(tickets_fallidos)} tickets ({', '.join(tickets_fallidos)}). Comprueba que no estén borrosos o cortados.")
         
         if todos_los_gastos:
-            # Ordenar y crear Excel limpio
             todos_los_gastos.sort(key=lambda x: (x["concepto"], x["fecha_dt"]))
             
             wb = openpyxl.Workbook()
@@ -101,9 +105,7 @@ if st.button("🚀 Procesar Gastos"):
             output = io.BytesIO()
             wb.save(output)
             
-            st.success(f"🎉 ¡Magia terminada! Se han procesado {len(todos_los_gastos)} gastos.")
-            
-            # Botón de descarga
+            st.success(f"🎉 ¡Proceso finalizado! Se han extraído {len(todos_los_gastos)} gastos correctamente.")
             st.download_button(
                 label="📥 Descargar Excel para Copiar y Pegar",
                 data=output.getvalue(),
