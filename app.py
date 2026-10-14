@@ -32,29 +32,36 @@ fotos = st.file_uploader("Arrastra aquí los tickets", type=["jpg", "jpeg", "png
 
 if st.button("🚀 Procesar Gastos"):
     if not api_key:
-        st.error("Error: Falta la clave API en la configuración de Secrets.")
+        st.error("Error: Falta la clave API en la configuración.")
     elif not fotos:
         st.warning("⚠️ Por favor, sube al menos un ticket.")
     else:
         client = genai.Client(api_key=api_key)
         todos_los_gastos = []
-        tickets_fallidos = []
+        lote_tamano = 3  # Agrupa de 3 en 3 fotos por petición
         
-        barra_progreso = st.progress(0, text="Iniciando lectura de tickets...")
+        barra_progreso = st.progress(0, text="Iniciando procesamiento agrupado...")
         
-        for i, foto in enumerate(fotos):
-            img = Image.open(foto)
-            img.thumbnail((1024, 1024))
+        for i in range(0, len(fotos), lote_tamano):
+            lote = fotos[i:i + lote_tamano]
+            nombres_lote = ", ".join([f.name for f in lote])
             
-            prompt = "Extrae los gastos. Para el concepto usa SÓLO mayúsculas según la lista estricta proporcionada."
+            # Preparar las imágenes comprimidas del bloque
+            contents = []
+            for f in lote:
+                img = Image.open(f)
+                img.thumbnail((1024, 1024))
+                contents.append(img)
+            
+            prompt = "Analiza todas estas fotos. Hay varios tickets. Extrae la información de cada uno de ellos por separado. Para concepto usa SÓLO mayúsculas según la lista estricta."
+            contents.append(prompt)
+            
             exito = False
-            ultimo_error = ""
-            
             for intento in range(3):
                 try:
                     response = client.models.generate_content(
                         model="gemini-3.8-flash",
-                        contents=[img, prompt],
+                        contents=contents,
                         config=types.GenerateContentConfig(
                             response_mime_type="application/json",
                             response_schema=ListaTickets,
@@ -71,28 +78,20 @@ if st.button("🚀 Procesar Gastos"):
                         exito = True
                         break
                     else:
-                        ultimo_error = "No se detectaron datos contables en la imagen"
+                        raise Exception("No se detectaron tickets válidos en este grupo.")
                 except Exception as e:
-                    ultimo_error = str(e)
-                    error_str = ultimo_error.upper()
-                    # Si el error es de saturación o límite por minuto, avisa y espera
-                    if "503" in error_str or "UNAVAILABLE" in error_str or "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                        st.toast(f"⏳ Límite de Google alcanzado. Esperando 12s para reintentar {foto.name}...", icon="🔄")
-                        time.sleep(12)
+                    error_str = str(e).upper()
+                    if "503" in error_str or "429" in error_str or "UNAVAILABLE" in error_str:
+                        st.toast(f"⏳ Servidor saturado. Reintentando bloque ({nombres_lote}) en 10s...", icon="🔄")
+                        time.sleep(10)
                     else:
-                        break # Si es otro error (ej. clave rota), no reintenta
+                        st.error(f"Error procesando {nombres_lote}: {e}")
+                        break
             
-            if not exito:
-                tickets_fallidos.append(f"{foto.name} (Motivo: {ultimo_error[:120]})")
-            
-            barra_progreso.progress((i + 1) / len(fotos), text=f"Procesando {i+1} de {len(fotos)} tickets...")
-            time.sleep(1) # Pausa mínima entre fotos para no ahogar la API
-        
-        if tickets_fallidos:
-            st.error("⚠️ Los siguientes tickets fallaron:")
-            for tf in tickets_fallidos:
-                st.write(f"- {tf}")
-        
+            porcentaje = min(1.0, (i + lote_tamano) / len(fotos))
+            barra_progreso.progress(porcentaje, text=f"Procesando bloque {min(i+lote_tamano, len(fotos))} de {len(fotos)} tickets...")
+            time.sleep(1)
+
         if todos_los_gastos:
             todos_los_gastos.sort(key=lambda x: (x["concepto"], x["fecha_dt"]))
             
@@ -115,3 +114,5 @@ if st.button("🚀 Procesar Gastos"):
                 file_name="TICKETS_LISTOS_PARA_PEGAR.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+        else:
+            st.error("No se ha podido extraer ningún gasto. Revisa que las fotos sean legibles o que no se haya agotado el cupo temporal.")
